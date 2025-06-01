@@ -1,23 +1,36 @@
-use std::{error::Error, io::{self, Write}};
+use std::{cmp, error::Error, io::{self, Write}, ops::Div};
 use bmp::{Image, Pixel};
+
+
+#[derive(PartialEq, PartialOrd)]
+pub enum Color {
+    RGB(u8, u8, u8),
+    HSL(u16, u8, u8)
+}
+
+#[derive(PartialEq, PartialOrd)]
+pub enum ColorMode {
+    RGB,
+    HSL
+}
 
 pub struct SixelEncoder
 {
-    color_palete: Vec<(u8, u8, u8)>,
+    color_palete: Vec<Color>,
     image_color_map: Vec<usize>,
     width: usize,
-    height: usize
+    height: usize,
 }
 
 impl SixelEncoder {
     
-    pub fn new(image: &Image) -> Self {
+    pub fn new(image: &Image, color_mode: ColorMode) -> Self {
         let width = image.get_width() as usize;
         let height = image.get_height() as usize;
         let mut color_palete = vec![];
         let mut image_color_map = vec![0_usize; width * height];
 
-        Self::generate_image_color_map(image, &mut image_color_map, &mut color_palete);
+        Self::generate_image_color_map(color_mode, image, &mut image_color_map, &mut color_palete);
         Self {
             color_palete,
             image_color_map,
@@ -31,11 +44,15 @@ impl SixelEncoder {
         writeln!(writer, "{esc}Pq", esc = 27 as char)?;
         // writeln!(writer, "#0;2;0;0;0");
 
-        for (i, (r,g,b)) in self.color_palete.iter().enumerate() {
-            writeln!(writer, "#{index};2;{r};{g};{b}", index = i, r = r, g = g , b = b)?;
+        for (i, color) in self.color_palete.iter().enumerate() {
+
+            match color {
+                Color::HSL(h, s, l) => writeln!(writer, "#{index};1;{h};{l};{s}", index = i, h = h, s = s, l = l)?,
+                Color::RGB(r,g,b) => writeln!(writer, "#{index};2;{r};{g};{b}", index = i, r = r, g = g , b = b)?
+            }
         }
 
-        writeln!(writer, "\"1;1;{height};{width}", height = self.height, width = self.width)?;
+        writeln!(writer, "\"1;1;{width};{height}", height = self.height, width = self.width)?;
 
         let mut y = 0;
         while y < self.height {
@@ -59,10 +76,19 @@ impl SixelEncoder {
         Ok(())
     }
 
-    fn generate_image_color_map(image: &Image, image_color_map: &mut Vec<usize>, color_palete: &mut Vec<(u8, u8, u8)>) {
+    fn generate_image_color_map(color_mode: ColorMode, image: &Image, image_color_map: &mut Vec<usize>, color_palete: &mut Vec<Color>) {
         for (x, y) in image.coordinates() {
             let pixel = image.get_pixel(x, y);
-            let rgb = Self::rgb_to_percents(pixel);
+            let rgb = match color_mode {
+                ColorMode::RGB => {
+                    let (r, g, b) = Self::rgb_to_percents(pixel);
+                    Color::RGB(r, g, b)
+                },
+                ColorMode::HSL => {
+                    let (h, s, l) = Self::rgb_to_hsl(pixel);
+                    Color::HSL(h, s, l)
+                }
+            };
             let coords = ((y * image.get_width()) + x) as usize;
 
             image_color_map[coords] = match color_palete.iter().position(|n| *n == rgb) {
@@ -84,16 +110,48 @@ impl SixelEncoder {
     }
 
     fn rgb_to_percents(pixel: Pixel) -> (u8, u8, u8) {
-        (Self::channel_to_percents(pixel.r), Self::channel_to_percents(pixel.g), Self::channel_to_percents(pixel.b))
+        (Self::channel_to_percents(pixel.r, 8),
+        Self::channel_to_percents(pixel.g, 8),
+        Self::channel_to_percents(pixel.b, 4))
+    }
+
+    fn rgb_to_hsl(pixel: Pixel) -> (u16, u8, u8) {
+
+        let (r, g, b) = (pixel.r as f32 / 255_f32, pixel.g as f32 / 255_f32, pixel.b as f32 / 255_f32);
+
+        let c_max = f32::max(f32::max(r, g), b) as f32;
+        let c_min = f32::min(f32::min(r, g), b) as f32;
+        let c_delta = c_max - c_min;
+
+        let hue: f32 = if f32::abs(c_delta - 0.0) <= f32::EPSILON {
+            0.0
+        } else if c_max == r {
+            (((g - b) / c_delta) % 6.0) * 60.0
+        } else if c_max == g {
+            (((b - r) / c_delta) + 2.0) * 60.0
+        } else {
+            (((r - g) / c_delta) + 4.0) * 60.0
+        };
+
+        let light = (c_max + c_min).div(2.0);
+
+        let saturation= if f32::abs(c_delta - 0.0) <= f32::EPSILON
+        {
+            0.0
+        } else {
+            let divider = 1.0 - f32::abs((2.0 * light) - 1.0);
+            
+            c_delta / divider
+        };
+
+        (hue as u16, (saturation * 100.0) as u8, (light * 100.0) as u8)
     } 
 
-    fn channel_to_percents(channel: u8) -> u8 {
-        const TOTAL_CHANNEL_RANGES: f32 = 6_f32;
-        const CHANNEL_RANGE_LENGTH: f32 = 256_f32 / TOTAL_CHANNEL_RANGES;
-
+    fn channel_to_percents(channel: u8, colors: u8) -> u8 {
+        let colors_in_range: f32 = 256_f32 / colors as f32;
         let channel: i32 = channel as i32;
-        let smoothed_color = ((channel + 1) as f32 / CHANNEL_RANGE_LENGTH).round();
-        let percentage = (smoothed_color / TOTAL_CHANNEL_RANGES) * 100_f32;
+        let quantized_color = ((channel + 1) as f32 / colors_in_range).round();
+        let percentage = (quantized_color / colors as f32) * 100_f32;
 
         percentage.floor() as u8
     } 
