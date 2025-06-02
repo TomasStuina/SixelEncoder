@@ -1,0 +1,12 @@
+[package]
+name = "sixel"
+version = "0.1.0"
+edition = "2024"
+
+# Debuginfo level for the compiler.
+# debuginfo-level-rustc = 2
+# debuginfo-level-std = 2
+
+[dependencies]
+bmp = "0.5.0"
+
