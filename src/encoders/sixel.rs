@@ -1,3 +1,4 @@
+use std::{error::Error, io::{self, Write}};
 use bmp::{Image, Pixel};
 
 pub struct SixelEncoder
@@ -25,34 +26,37 @@ impl SixelEncoder {
         }
     }
 
-    pub fn encode(&mut self) {
-        println!("{esc}Pq", esc = 27 as char);
-        // println!("#0;2;0;0;0");
+    pub fn encode<W: Write>(&mut self, writer: &mut io::BufWriter<W>) -> Result<(), Box<dyn Error>> {
+
+        writeln!(writer, "{esc}Pq", esc = 27 as char)?;
+        // writeln!(writer, "#0;2;0;0;0");
 
         for (i, (r,g,b)) in self.color_palete.iter().enumerate() {
-            println!("#{index};2;{r};{g};{b}", index = i, r = r, g = g , b = b);
+            writeln!(writer, "#{index};2;{r};{g};{b}", index = i, r = r, g = g , b = b)?;
         }
 
-        println!("\"1;1;{height};{width}", height = self.height, width = self.width);
+        writeln!(writer, "\"1;1;{height};{width}", height = self.height, width = self.width)?;
 
         let mut y = 0;
         while y < self.height {
 
             for vertical_offset in 0..6 {
                 if y + vertical_offset < self.height {
-                    print!("$");
+                   write!(writer, "$")?;
 
                     let line_start = ((y + vertical_offset) * self.width) as usize;
                     let line_end = line_start + self.width as usize;
-                    Self::print_pixel_line(&self.image_color_map[line_start..line_end], 1 << vertical_offset);
+                    Self::print_pixel_line(writer, &self.image_color_map[line_start..line_end], 1 << vertical_offset)?;
                 }
             }
 
-            print!("-");
+           write!(writer, "-")?;
             y += 5;
         }
 
-        println!("{esc}\\", esc = 27 as char);
+        writeln!(writer, "{esc}\\", esc = 27 as char)?;
+
+        Ok(())
     }
 
     fn generate_image_color_map(image: &Image, image_color_map: &mut Vec<usize>, color_palete: &mut Vec<(u8, u8, u8)>) {
@@ -71,10 +75,12 @@ impl SixelEncoder {
         }
     }
 
-    fn print_pixel_line(line_color_map: &[usize], line_mask: u8) {
+    fn print_pixel_line<W: Write>(writer: &mut io::BufWriter<W>, line_color_map: &[usize], line_mask: u8) -> Result<(), Box<dyn Error>> {
         for color_index in line_color_map  {
-            print!("#{color_index}{chr}", color_index = color_index, chr = (0x3Fu8 + line_mask) as char);
+           write!(writer, "#{color_index}{chr}", color_index = color_index, chr = (0x3Fu8 + line_mask) as char)?;
         }
+
+        Ok(())
     }
 
     fn rgb_to_percents(pixel: Pixel) -> (u8, u8, u8) {
